@@ -1,4 +1,3 @@
-# Import required libraries
 import datetime
 import os
 import time
@@ -9,9 +8,8 @@ from math import sqrt
 from math import isnan
 from math import floor
 
-
 # We can buy, sell, or do nothing each time we make a decision.
-# This class defies a nobject for keeping track of our current investments/profits for each currency pair
+# This class defies a object for keeping track of our current investments/profits for each currency pair
 class portfolio(object):
     def __init__(self, from_, to):
         # Initialize the 'From' currency amont to 1
@@ -56,7 +54,7 @@ class data_writer():
     def __init__(self, currency_pairs, location = os.getcwd(), table_name = "final_db"):
         # The api key given by the professor
         self.count = 0
-        self.agg_count = 0
+        
         self.key = "beBybSi8daPgsTp5yx5cHtHpYcrjp5Jq"
         # Currency pairs passed to the class
         self.currency_pairs = currency_pairs
@@ -64,6 +62,8 @@ class data_writer():
         self.db_location = location
         # Enter name of database
         self.table_name = table_name
+        self.aggregate_max = 360 # 6 minutes worth of data - Code change #1 for HWK2
+        
 
     # Function slightly modified from polygon sample code to format the date string
     def ts_to_datetime(self, ts) -> str:
@@ -93,6 +93,14 @@ class data_writer():
                 conn.execute(text(
                     "CREATE TABLE " + curr[0] + curr[1] + "_agg(inserttime text, avgfxrate  numeric, stdfxrate numeric);"))
 
+    # This creates a table for storing the (6 min interval) keltner data vectors
+    # Code change #2 for HWK2
+    def initialize_keltner_tables(self,engine):
+        with engine.begin() as conn:
+            for curr in self.currency_pairs:
+                conn.execute(text(
+                    "CREATE TABLE " + curr[0] + curr[1] + "_keltner(min_price, max_price, average_price, volatility,fd);"))
+
 
     # This function is called every 6 minutes to aggregate the data, store it in the aggregate table,
     # and then delete the raw data
@@ -118,7 +126,7 @@ class data_writer():
 
                 # This calculates and stores the return values
                 exec("curr[2].append(" + curr[0] + curr[1] + "_return(last_date,avg_price))")
-                # exec("print(\"The return for "+curr[0]+curr[1]+" is:"+str(curr[2][-1].hist_return)+" \")")
+                exec("print(\"The return for "+curr[0]+curr[1]+" is:"+str(curr[2][-1].hist_return)+" \")")
 
                 if len(curr[2]) > 5:
                     try:
@@ -129,7 +137,7 @@ class data_writer():
                         avg_pop_value = 0
                 else:
                     avg_pop_value = 0
-                # Calculate the average return value and print it/store it
+               # Calculate the average return value and print it/store it
                 curr_avg = curr[2][-1].get_avg(avg_pop_value)
                 # exec("print(\"The average return for "+curr[0]+curr[1]+" is:"+str(curr_avg)+" \")")
 
@@ -151,8 +159,7 @@ class data_writer():
                 else:
                     pop_value = 0
                 curr_avg_std = curr[2][-1].get_avg_std(pop_value)
-                # exec("print(\"The average standard deviation of the return for "+curr[0]+curr[1]+" is:"+str(curr_avg_std)+" \")")
-
+                # exec("print(\"The average standard deviation of the return for "+curr[0]+curr[1]+" is:"+str(curr_avg_std)+" \")")  
                 # -------------------Investment Strategy-----------------------------------------------
                 try:
                     return_value = curr[2][-1].hist_return
@@ -191,19 +198,46 @@ class data_writer():
                 except:
                     pass
 
+# Code change #3 for HWK2
+# Define a function to calculate the keltner bands
+    def calculate_factors(self, min_bid, max_bid,sum_bid,): 
+        volatility = (max_bid - min_bid)  # Calculate the volatility
+        avg_price = sum_bid / self.aggregate_max # Calculate the average price
+        upper_bands = [] # Create a list to store the upper bands
+        lower_bands = [] # Create a list to store the lower bands
+        for i in range(1, 101):
+            upper_bands.append(avg_price + i * 0.025 * volatility) # Calculate the upper bands
+            lower_bands.append(avg_price - i * 0.025 * volatility) # Calculate the lower bands
+        
+        return volatility, avg_price,upper_bands,lower_bands # Return the volatility, average price, upper bands and lower bands
+        
+    
     def acquire_data_and_write(self):
 
         # Number of list iterations - each one should last about 1 second
         self.count = 0
-        self.agg_count = 0
+
+        # Code change #4 for HWK2
+        # Initialize values to be used in the loop
+        min_prices = [999999999] * len(self.currency_pairs) # Initialize the minimum price list
+        max_prices = [0] * len(self.currency_pairs) # Initialize the maximum price list
+        sum_prices = [0] * len(self.currency_pairs) # Initialize the sum price list
+        total_crosses = [0] * len(self.currency_pairs) # Initialize the total crosses list
+        aggregate_counters = [0] * len(self.currency_pairs) # Initialize the aggregate counters list
+        keltner_bands_exist_flags = [False] * len(self.currency_pairs) # Initialize the keltner bands exist flags list
+        upper_bands=[[]] * len(self.currency_pairs) # Initialize the upper bands list
+        lower_bands=[[]] * len(self.currency_pairs) # Initialize the lower bands list
 
         # Create an engine to connect to the database; setting echo to false should stop it from logging in std.out
         print("DB file location: sqlite+pysqlite:///{}/{}.db".format(self.db_location, self.table_name))
         engine = create_engine("sqlite+pysqlite:///{}/{}.db".format(self.db_location, self.table_name), echo=False, future=True)
 
         # Create the needed tables in the database
-        self.initialize_raw_data_tables(engine)
+        self.initialize_raw_data_tables(engine) 
         self.initialize_aggregated_tables(engine)
+
+        # Code change #5 for HWK2
+        self.initialize_keltner_tables(engine)  # Create the keltner tables in the database
 
         # Open a RESTClient for making the api calls
         with RESTClient(self.key) as client:
@@ -211,42 +245,82 @@ class data_writer():
             while self.count < 86400:  # 86400 seconds = 24 hours
                 print(self.count)
 
-                # Make a check to see if 6 minutes has been reached or not
-                if self.agg_count == 360:
-                    # Aggregate the data and clear the raw data tables
-                    self.aggregate_raw_data_tables(engine)
-                    self.reset_raw_data_tables(engine)
-                    self.agg_count = 0
-
                 # Only call the api every 1 second, so wait here for 0.75 seconds, because the
                 # code takes about .15 seconds to run
                 time.sleep(0.75)
 
+                # Code change #6 for HWK2
                 # Increment the counters
                 self.count += 1
-                self.agg_count += 1
+                # Count the number of seconds that have passed since the start of the program
+                aggregate_counters = [x + 1 for x in aggregate_counters]
 
                 # Loop through each currency pair
-                for currency in self.currency_pairs:
-                    print("here")
+                for iter in range(len(self.currency_pairs)):
+                    currency = self.currency_pairs[iter]
+                    cross = 0
                     # Set the input variables to the API
                     from_ = currency[0]
                     to = currency[1]
 
+                    # Code change #7 for HWK2
+                    # Make a check to see if 6 minutes has been reached or not
+                    # If it has, then calculate the keltner bands 
+                    if aggregate_counters[iter] == self.aggregate_max:
+                        volatility, avg_price,upper_bands[iter],lower_bands[iter] = self.calculate_factors(min_prices[iter], max_prices[iter],sum_prices[iter])
+                        
+                        # If the keltner bands exist, then calculate the crosses
+                        # If the keltner bands do not exist, then set the keltner bands exist flag to true
+                        # and set the min, max and sum prices to the current price
+                        # and set the aggregate counter to 0
+                        # and set the total crosses to 0
+                    
+                        if volatility ==0:
+                            min_prices[iter] = 999999999
+                            max_prices[iter] = 0
+                            sum_prices[iter] = 0
+                            aggregate_counters[iter] = 0
+                            total_crosses[iter] = 0
+                            keltner_bands_exist_flags[iter] = False
+                            continue
+                        
+                        # Calculate fd as total crosses/volatility
+                        fd = total_crosses[iter] / volatility
+
+                        # make vector for min,max,avg,vol,fd
+                        keltner_vector = [min_prices[iter], max_prices[iter], avg_price, volatility, fd]
+
+                        # print the vector
+                        print("The vector for " + currency[0] + currency[1] + " is:" + str(keltner_vector) + "\n")
+
+                        # Insert the vector into the database
+                        with engine.begin() as conn:
+                            conn.execute(text(
+                                "INSERT INTO " + from_ + to + "_keltner(min_price, max_price, average_price, volatility,fd) VALUES (:min_price, :max_price, :average_price, :volatility, :fd)"),
+                                        [{"min_price": min_prices[iter], "max_price": max_prices[iter], "average_price": avg_price, "volatility": volatility, "fd": fd}])
+
+                        # Reset the counters
+                        min_prices[iter] = 999999999
+                        max_prices[iter] = 0
+                        sum_prices[iter] = 0
+                        aggregate_counters[iter] = 0
+                        total_crosses[iter] = 0
+                        keltner_bands_exist_flags[iter] = True
+
                     # Call the API with the required parameters
                     try:
-                        resp = client.forex_currencies_real_time_currency_conversion(from_, to, amount=100, precision=2)
-                        print(resp)
+                        resp =  client.forex_currencies_real_time_currency_conversion(from_, to, amount=100, precision=2)
+                        # print(resp)
                     except:
-                        print("exception")
+                        print("Exception for " + from_ + to)
                         continue
 
                     # This gets the Last Trade object defined in the API Resource
                     last_trade = resp.last
-                    print(last_trade)
+                    #print(last_trade)
 
                     # Format the timestamp from the result
-                    dt = ts_to_datetime(last_trade["timestamp"])
+                    dt = self.ts_to_datetime(last_trade["timestamp"])
 
                     # Get the current time and format it
                     insert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -254,11 +328,38 @@ class data_writer():
                     # Calculate the price by taking the average of the bid and ask prices
                     avg_price = (last_trade['bid'] + last_trade['ask']) / 2
 
+                    # Code change #8 for HWK2
+                    # Update the min, max and sum prices
+                    
+                    if avg_price < min_prices[iter]:
+                        min_prices[iter] = avg_price
+                    if avg_price > max_prices[iter]:
+                        max_prices[iter] = avg_price
+                    sum_prices[iter] += avg_price
+                    if(keltner_bands_exist_flags[iter]):
+                        if avg_price > upper_bands[iter][0]:
+                            cross = 1
+                        elif avg_price < lower_bands[iter][0]:
+                            cross = 1
+                    
+                    total_crosses[iter] += cross
+
                     # Write the data to the SQLite database, raw data tables
                     with engine.begin() as conn:
                         conn.execute(text(
                             "INSERT INTO " + from_ + to + "_raw(ticktime, fxrate, inserttime) VALUES (:ticktime, :fxrate, :inserttime)"),
                                      [{"ticktime": dt, "fxrate": avg_price, "inserttime": insert_time}])
 
+        # Code change #9 for HWK2
+        # Print the table of vectors for all currency pairs
+        for currency in self.currency_pairs:
+            print("For " + currency[0] + "-"+ currency[1] +":")
+            with engine.begin() as conn:
+                result = conn.execute(text("SELECT min_price, max_price, average_price, volatility,fd FROM " + currency[0] + currency[1] + "_keltner;"))
+                print("min_price, max_price, average_price, volatility,fd")
+                for rows in result:
+                    print(rows.min_price, rows.max_price, rows.average_price, rows.volatility, rows.fd)
+                print("\n")
 
+        
 
