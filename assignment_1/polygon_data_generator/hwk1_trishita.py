@@ -10,6 +10,7 @@ Original file is located at
 # Import required libraries
 #pip install polygon-api-client~=0.1.0
 import datetime
+from random import randint
 import time
 from polygon import RESTClient
 from sqlalchemy import create_engine 
@@ -628,6 +629,20 @@ currency_pairs = [["AUD","USD",[],portfolio("AUD","USD")],
                   ["USD","PLN",[],portfolio("USD","PLN")],
                   ["USD","INR",[],portfolio("USD","INR")]]
 
+import random
+
+# Randomly assign 5 currency pairs for a long trade and the rest for a short trade
+long_pairs = random.sample(currency_pairs,5)
+short_pairs = [x for x in currency_pairs if x not in long_pairs]
+
+for pair in long_pairs:
+    pair[3].position = "LONG"
+for pair in short_pairs:
+    pair[3].position = "SHORT"
+currency_pairs = long_pairs + short_pairs
+
+for i in currency_pairs:
+    print(i[0],i[1],i[3].position)
 # Run the main data collection loop
 
 # Making a class

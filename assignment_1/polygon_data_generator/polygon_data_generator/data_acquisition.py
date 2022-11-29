@@ -7,46 +7,21 @@ from sqlalchemy import text
 from math import sqrt
 from math import isnan
 from math import floor
+import csv
 
 # We can buy, sell, or do nothing each time we make a decision.
 # This class defies a object for keeping track of our current investments/profits for each currency pair
 class portfolio(object):
     def __init__(self, from_, to):
-        # Initialize the 'From' currency amont to 1
-        self.amount = 1
-        self.curr2 = 0
+        # Define the currency pair we are trading
         self.from_ = from_
         self.to = to
-        # We want to keep track of state, to see what our next trade should be
-        self.Prev_Action_was_Buy = False
 
-    # This defines a function to buy the 'To' currency. It will always buy the max amount, in whole number
-    # increments
-    def buy_curr(self, price):
-        if self.amount >= 1:
-            num_to_buy = floor(self.amount)
-            self.amount -= num_to_buy
-            self.Prev_Action_was_Buy = True
-            self.curr2 += num_to_buy * price
-            print(
-                "Bought %d worth of the target currency (%s). Our current profits and losses in the original currency (%s) are: %f." % (
-                num_to_buy, self.to, self.from_, (self.amount - 1)))
-        else:
-            print("There was not enough of the original currency (%s) to make another buy." % self.from_)
-
-    # This defines a function to sell the 'To' currency. It will always sell the max amount, in a whole number
-    # increments
-    def sell_curr(self, price):
-        if self.curr2 >= 1:
-            num_to_sell = floor(self.curr2)
-            self.amount += num_to_sell * (1 / price)
-            self.Prev_Action_was_Buy = False
-            self.curr2 -= num_to_sell
-            print(
-                "Sold %d worth of the target currency (%s). Our current profits and losses in the original currency (%s) are: %f." % (
-                num_to_sell, self.to, self.from_, (self.amount - 1)))
-        else:
-            print("There was not enough of the target currency (%s) to make another sell." % self.to)
+        self.position = "INACTIVE"
+        self.current_units = 0
+        self.units_list = []
+        self.price_list = []
+        self.pnl = 0
 
 
 class data_writer():
@@ -62,7 +37,8 @@ class data_writer():
         self.db_location = location
         # Enter name of database
         self.table_name = table_name
-        self.aggregate_max = 360 # 6 minutes worth of data - Code change #1 for HWK2
+        self.aggregate_max = 180 # 6 minutes worth of data - Code change #1 for HWK2
+        self.trailing_count = []
         
 
     # Function slightly modified from polygon sample code to format the date string
@@ -99,7 +75,7 @@ class data_writer():
         with engine.begin() as conn:
             for curr in self.currency_pairs:
                 conn.execute(text(
-                    "CREATE TABLE " + curr[0] + curr[1] + "_keltner(min_price, max_price, average_price, volatility,fd);"))
+                    "CREATE TABLE " + curr[0] + curr[1] + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time);"))
 
 
     # This function is called every 6 minutes to aggregate the data, store it in the aggregate table,
@@ -211,7 +187,128 @@ class data_writer():
         
         return volatility, avg_price,upper_bands,lower_bands # Return the volatility, average price, upper bands and lower bands
         
+    def trailing_layer(self, portfolio, return_sum, threshold, current_value,iter):
+        position_for_last_frame = portfolio.position
+        total_units_last_frame = portfolio.current_units
+
+        if return_sum == None:
+            return
+
+        # Calculate the total return on the currency pairs doing long trades
+        if(portfolio.position == 'LONG'):
+            selling_price = current_value * portfolio.current_units
+                
+            buying_price  = 0
+            for i in range(0,len(portfolio.units_list)):
+                buying_price+=portfolio.units_list[i]*portfolio.price_list[i]
+
+            portfolio.pnl=selling_price - buying_price
+
+            print("For the currency pair: ", portfolio.from_, portfolio.to)
+            print("Return sum:", return_sum)
+            if(return_sum<-threshold):        
+                portfolio.position = 'CLOSED'
+                portfolio.current_units = 0
+                portfolio.units_list = []
+                portfolio.price_list = [] 
+                print("Seling all units of "+portfolio.from_+portfolio.to)
+                print("Return rate is "+str(return_sum))
+                print("Selling price: "+str(selling_price))
+                print("Buying price: "+str(buying_price))
+                print("PnL: "+str(portfolio.pnl))
+            
+            else:
+                step_units = 100
+                portfolio.units_list.append(step_units)
+                portfolio.price_list.append(current_value)
+                portfolio.current_units+=step_units
+                print("Buying 100 more units of "+portfolio.from_+portfolio.to)
+                print("Return rate is "+str(return_sum))
+                print("PnL: "+str(portfolio.pnl))
+
+        elif(portfolio.position == 'SHORT'):
+            selling_price = 0
+            for i in range(0,len(portfolio.units_list)):
+                selling_price+=portfolio.units_list[i]*portfolio.price_list[i]
+
+            buying_price  = current_value * portfolio.current_units
+
+            portfolio.pnl=buying_price - selling_price
+
+            if(return_sum>threshold):
+                portfolio.position = 'CLOSED'
+                portfolio.current_units = 0 
+            else:
+                step_units = 100
+                portfolio.units_list.append(step_units)
+                portfolio.price_list.append(current_value)
+                portfolio.current_units+=step_units
+        
+        self.write_to_csv(portfolio.from_, portfolio.to, position_for_last_frame, total_units_last_frame, portfolio.pnl, return_sum,iter)
+                        
+    # Define a function to write the results of total units, total pnl of each currency pair to a csv file
     
+    def write_to_csv(self,from_, to, position, total_units, total_pnl,return_sum,iter):
+        with open('csv_files/trailing_layers_'+from_+to+'.csv', 'a', newline='') as file:
+            writer = csv.writer(file)
+            if(self.trailing_count[iter] ==0):
+                writer.writerow(["Step","Position", "Total Units", "PnL","Return sum"])
+            self.trailing_count[iter]+=10
+            writer.writerow(["T"+str(self.trailing_count[iter]),position, total_units, total_pnl,return_sum])
+
+    def get_total_return(self, engine, from_curr, to_curr, time_frame):
+        # Calculate the total sum of returns for each currency pair every hour and store it in the database
+        total_return = 0
+
+        # Get the current time
+        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Calculate the current time in seconds
+        current_time_seconds = time.mktime(datetime.datetime.strptime(current_time, "%Y-%m-%d %H:%M:%S").timetuple())
+
+        # Calculate the time in seconds for one hour ago
+        one_hour_ago_seconds = current_time_seconds - time_frame
+
+        # Sum the return_prices for each currency pair for the last hour
+        with engine.begin() as conn:
+            result = conn.execute(text("SELECT SUM(return_price) FROM " + from_curr + to_curr + "_keltner WHERE insert_time > :one_hour_ago_seconds;"), [{"one_hour_ago_seconds":one_hour_ago_seconds}])
+            for row in result:
+                total_return = row[0]
+
+        return total_return
+            
+    def trailing_stops(self, count, engine, from_curr, to_curr, portfolio, current_value,iter):
+        # Perform trailing stops for each currency pair
+        hour_in_seconds = 1800
+        if(count == 1 * hour_in_seconds ):
+            # Get the total return for the last hour
+            total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Perform trailing stops
+            self.trailing_layer(portfolio, total_return, 0.0025, current_value,iter)
+
+        elif(count == 2 * hour_in_seconds ):
+            # Get the total return for the last hour
+            total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Perform trailing stops
+            self.trailing_layer(portfolio, total_return, 0.0015, current_value,iter)
+
+        elif(count == 3 * hour_in_seconds):
+            # Get the total return for the last hour
+            total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Perform trailing stops
+            self.trailing_layer(portfolio, total_return, 0.001, current_value,iter)
+
+        elif(count % ( hour_in_seconds) == 0 ):
+            # Get the total return for the last hour
+            total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Perform trailing stops
+            self.trailing_layer(portfolio, total_return, 0.0005, current_value,iter)        
+
+        
     def acquire_data_and_write(self):
 
         # Number of list iterations - each one should last about 1 second
@@ -227,6 +324,8 @@ class data_writer():
         keltner_bands_exist_flags = [False] * len(self.currency_pairs) # Initialize the keltner bands exist flags list
         upper_bands=[[]] * len(self.currency_pairs) # Initialize the upper bands list
         lower_bands=[[]] * len(self.currency_pairs) # Initialize the lower bands list
+        keltner_header_exists = [False] * len(self.currency_pairs) # Initialize the keltner header exists list
+        self.trailing_count = [0] * len(self.currency_pairs) # Initialize the trailing count list
 
         # Create an engine to connect to the database; setting echo to false should stop it from logging in std.out
         print("DB file location: sqlite+pysqlite:///{}/{}.db".format(self.db_location, self.table_name))
@@ -242,7 +341,7 @@ class data_writer():
         # Open a RESTClient for making the api calls
         with RESTClient(self.key) as client:
             # Loop that runs until the total duration of the program hits 24 hours.
-            while self.count < 86400:  # 86400 seconds = 24 hours
+            while self.count < 36000:  # 36000 seconds = 10 hours
                 print(self.count)
 
                 # Only call the api every 1 second, so wait here for 0.75 seconds, because the
@@ -266,9 +365,10 @@ class data_writer():
                     # Code change #7 for HWK2
                     # Make a check to see if 6 minutes has been reached or not
                     # If it has, then calculate the keltner bands 
-                    if aggregate_counters[iter] == self.aggregate_max:
+                    if aggregate_counters[iter] == self.aggregate_max+1:
                         volatility, avg_price,upper_bands[iter],lower_bands[iter] = self.calculate_factors(min_prices[iter], max_prices[iter],sum_prices[iter])
-                        
+                        prev_avg_price = 0
+                        return_price = 0
                         # If the keltner bands exist, then calculate the crosses
                         # If the keltner bands do not exist, then set the keltner bands exist flag to true
                         # and set the min, max and sum prices to the current price
@@ -276,19 +376,36 @@ class data_writer():
                         # and set the total crosses to 0
                     
                         if volatility ==0:
+                            volatility=1.0
                             min_prices[iter] = 999999999
                             max_prices[iter] = 0
                             sum_prices[iter] = 0
-                            aggregate_counters[iter] = 0
+                            aggregate_counters[iter] = 1
                             total_crosses[iter] = 0
                             keltner_bands_exist_flags[iter] = False
+                            return_price = 0
+                            prev_avg_price = 0
                             continue
                         
                         # Calculate fd as total crosses/volatility
                         fd = total_crosses[iter] / volatility
 
-                        # make vector for min,max,avg,vol,fd
-                        keltner_vector = [min_prices[iter], max_prices[iter], avg_price, volatility, fd]
+                        # Code Change #1 for HWK3
+                        # add a new feature: the return 𝑟𝑟 defined as 𝑟𝑟 = (𝑃𝑃 − 𝑃𝑃 )⁄𝑃𝑃 , where 𝑃𝑃 is the price at the end of the 6-minute period and 𝑃𝑃 is the price at the beginning of the 6-minute period
+                        # code for calculating the return
+
+                        # Get the avg_price from the database of the previous 6 minutes
+                        with engine.begin() as conn:
+                            result = conn.execute(text("SELECT average_price FROM " + from_ + to + "_keltner ORDER BY insert_time DESC LIMIT 1"))
+                            for row in result:
+                                prev_avg_price = row[0]
+
+                        # Calculate the return price only if the previous average price is not 0
+                        if prev_avg_price != 0:
+                            return_price = (avg_price - prev_avg_price) / prev_avg_price
+
+                        # make vector for min,max,avg,vol,fd, return
+                        keltner_vector = [min_prices[iter], max_prices[iter], avg_price, volatility, fd, return_price]
 
                         # print the vector
                         print("The vector for " + currency[0] + currency[1] + " is:" + str(keltner_vector) + "\n")
@@ -296,23 +413,36 @@ class data_writer():
                         # Insert the vector into the database
                         with engine.begin() as conn:
                             conn.execute(text(
-                                "INSERT INTO " + from_ + to + "_keltner(min_price, max_price, average_price, volatility,fd) VALUES (:min_price, :max_price, :average_price, :volatility, :fd)"),
-                                        [{"min_price": min_prices[iter], "max_price": max_prices[iter], "average_price": avg_price, "volatility": volatility, "fd": fd}])
+                                "INSERT INTO " + from_ + to + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time) VALUES (:min_price, :max_price, :average_price, :volatility, :fd, :return_price, :insert_time)"),
+                                        [{"min_price": min_prices[iter], "max_price": max_prices[iter], "average_price": avg_price, "volatility": volatility, "fd": fd, "return_price": return_price, "insert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])
+
+
+                        # Make a csv file for the vector and append it to the csv file
+                        with open('csv_files/keltner_vector_'+from_+to+'.csv', 'a', newline='') as file:
+                            writer = csv.writer(file)
+                            if(keltner_header_exists[iter] == False):
+                                writer.writerow(["min_price", "max_price", "average_price", "volatility", "fd", "return_price"])
+                                keltner_header_exists[iter] = True
+                            writer.writerow(keltner_vector)
 
                         # Reset the counters
                         min_prices[iter] = 999999999
                         max_prices[iter] = 0
                         sum_prices[iter] = 0
-                        aggregate_counters[iter] = 0
+                        aggregate_counters[iter] = 1
                         total_crosses[iter] = 0
                         keltner_bands_exist_flags[iter] = True
 
+                        # Step 1
+
+                    
                     # Call the API with the required parameters
                     try:
                         resp =  client.forex_currencies_real_time_currency_conversion(from_, to, amount=100, precision=2)
                         # print(resp)
                     except:
                         print("Exception for " + from_ + to)
+                        # aggregate_counters[iter]-=1
                         continue
 
                     # This gets the Last Trade object defined in the API Resource
@@ -341,8 +471,16 @@ class data_writer():
                             cross = 1
                         elif avg_price < lower_bands[iter][0]:
                             cross = 1
-                    
+    
                     total_crosses[iter] += cross
+
+                    if(self.count == 1):
+                        print("---------------Initialize trade with 100 units for "+from_+to+"-----------------")
+                        currency[3].current_units = 100
+                        currency[3].units_list.append(100)
+                        currency[3].price_list.append(avg_price)
+
+                    self.trailing_stops(self.count,engine,from_,to,currency[3],avg_price,iter)
 
                     # Write the data to the SQLite database, raw data tables
                     with engine.begin() as conn:
@@ -361,5 +499,4 @@ class data_writer():
                     print(rows.min_price, rows.max_price, rows.average_price, rows.volatility, rows.fd)
                 print("\n")
 
-        
 
