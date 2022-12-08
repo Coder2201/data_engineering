@@ -37,7 +37,7 @@ from polygon_data_generator import portfolio
 from polygon_data_generator import currency_volatility_thresholds
 from pycaret.regression import *
 
-#A dictionary defining the set of currency pairs we will be pulling data for
+# Defining a dictioniary with the set of currency pairs we will be pulling data for
 currency_pairs = [["USD","CAD",[],portfolio("USD","CAD")],
                    ["USD","JPY",[],portfolio("USD","JPY")],
                    ["USD","MXN",[],portfolio("USD","MXN")],
@@ -50,11 +50,11 @@ currency_pairs = [["USD","CAD",[],portfolio("USD","CAD")],
 # Importing function to randomly assign a currency pair for long and short positions
 import random
 
-# Randomly assign 5 currency pairs for a long trade and the rest for a short trade
+# Randomly assigning 5 currency pairs for a long trade and the rest for a short trade
 long_pairs = random.sample(currency_pairs,4)
 short_pairs = [x for x in currency_pairs if x not in long_pairs]
 
-# Assign the position for each currency pair
+# Assigning the position for each currency pair
 for pair in long_pairs:
     pair[3].position = "LONG"
 for pair in short_pairs:
@@ -70,9 +70,10 @@ for i in currency_pairs:
 data_writer = data_writer(currency_pairs)
 
 # Calling the function
-data_writer.acquire_data_and_write()
-'''
-# ******************* Code Changes for HWK4 ******************************************************
+#----------------------Uncomment line to hit the API and collect data--------------------------
+# data_writer.acquire_data_and_write() 
+
+# ******************* Code Change for HWK4 ******************************************************
 # Targeting the currency pairs for which we need to train data
 train_currency_pairs = [["USD","CAD",[],portfolio("USD","CAD")],
                   ["USD","JPY",[],portfolio("USD","JPY")],
@@ -98,19 +99,19 @@ class currency_volatility_thresholds(object):
 # 2. Medium VOL and high FD (following 34 data points); and
 # 3. Low VOL and high FD (lower 33 data points).
 
-# Sort the data points by VOL in each training set for each currency pair
+# Sorting the data points by VOL in each training set for each currency pair
 train_set = {}
 volatility_thresholds = {}
 for pair in train_currency_pairs:
     df = pd.read_csv("csv_files/keltner_vector_"+pair[0]+pair[1]+".csv")
     df = df.sort_values(by=['volatility'],ascending=False)
     
-    # Store the sorted data in a dictionary
+    # Storing the sorted data in a dictionary
     vol_values_1 = df.iloc[0:33]['volatility'].to_numpy()
     vol_values_2 = df.iloc[34:67]['volatility'].to_numpy()
     vol_values_3 = df.iloc[68:99]['volatility'].to_numpy()
 
-    # Assign the class labels to the volatility values and fd values based on the ranking. First 33 as class 1. 
+    # Assigning the class labels to the volatility values and fd values based on the ranking. First 33 as class 1. 
     df.iloc[0:33, df.columns.get_loc('volatility')] = "1"
     df.iloc[0:33, df.columns.get_loc('fd')] = "1"
 
@@ -148,13 +149,12 @@ for pair in train_currency_pairs:
     # save the tuned model as the best regression model
     best_tuned = save_model(tuned_model, 'tuned_model_'+pair[0]+pair[1])
 
-# Use the Linear Regression model to predict the hourly Return vector for each currency pair in the test set collecting data in real time
+# Load the tuned model and test the model on the test set
 for pair in train_currency_pairs:
     # load the model
     model = load_model('tuned_model_'+pair[0]+pair[1])
     # load the test set
     test_set = pd.read_csv("test_files/test_set_"+pair[0]+pair[1]+".csv")
-    #prepare test data
 
 # The test set is prepared in the same way as the training set
     test_set.loc[test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_1_lower, 'fd'] = "1"
@@ -167,17 +167,17 @@ for pair in train_currency_pairs:
                   & (test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_3_higher), 'volatility'] = 2
     test_set.loc[ test_set['volatility'] < volatility_thresholds[pair[0] + pair[1]].class_3_higher, 'volatility'] = 3
 
-    # Predict the hourly Return vector
+    # Predicting the hourly return vector
     predictions = predict_model(model, data=test_set)
-    # Add the predicted hourly Return vector to the test set
+    # Adding the predicted hourly Return vector to the test set
     test_set['Predicted Return'] = predictions['prediction_label']
     # Save the test set
     test_set.to_csv("Test_set_"+pair[0]+pair[1]+".csv",index=False)
 
-# Make a csv file for each currency pair with the following columns: Return, Predicted Return and MAE
+# Printing a csv file for each currency pair with the following columns: Return, Predicted Return and MAE
 for pair in train_currency_pairs:
     test_set = pd.read_csv("Test_set_"+pair[0]+pair[1]+".csv")
     test_set['MAE'] = np.abs(test_set['return_price']-test_set['Predicted Return'])
     test_set.to_csv("Test_set_"+pair[0]+pair[1]+".csv",index=False)
 
-'''
+

@@ -1,2 +1,3 @@
 from polygon_data_generator.data_acquisition import data_writer
 from polygon_data_generator.data_acquisition import portfolio
+from polygon_data_generator.data_acquisition import currency_volatility_thresholds
