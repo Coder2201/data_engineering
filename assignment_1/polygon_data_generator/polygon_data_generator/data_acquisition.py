@@ -1,7 +1,6 @@
 import datetime
 import os
 import time
-
 from polygon import RESTClient
 from sqlalchemy import create_engine
 from sqlalchemy import text
@@ -11,14 +10,13 @@ from math import floor
 import pickle
 from pycaret.regression import *
 import pandas as pd
-
-# Code Change #1 for HWK3**************************************************************************************************
 import csv
 
 # We can buy, sell, or do nothing each time we make a decision.
 # This class defies a object for keeping track of our current investments/profits for each currency pair
 class portfolio(object):
     def __init__(self, from_, to): 
+
         # Define the currency pair we are trading
         self.from_ = from_ # The currency we are buying
         self.to = to # The currency we are selling
@@ -29,7 +27,7 @@ class portfolio(object):
         self.price_list = []   # We start with an empty list of prices
         self.pnl = 0          # We start with no profit/loss
 
-#**********************************************************************************************************************
+# Code Change #2 for HWK4
 class currency_volatility_thresholds(object):
     def __init__(self, class_1_lower, class_1_higher, class_2_lower, class_2_higher, class_3_lower, class_3_higher):
         self.class_1_lower = class_1_lower
@@ -44,7 +42,6 @@ class data_writer():
     def __init__(self, currency_pairs, location = os.getcwd(), table_name = "final_db"):
         # The api key given by the professor
         self.count = 0
-        
         self.key = "beBybSi8daPgsTp5yx5cHtHpYcrjp5Jq"
         # Currency pairs passed to the class
         self.currency_pairs = currency_pairs
@@ -52,148 +49,35 @@ class data_writer():
         self.db_location = location
         # Enter name of database
         self.table_name = table_name
-        self.aggregate_max = 360 # 6 minutes worth of data - Code change #1 for HWK2
+        self.aggregate_max = 10 # 6 minutes worth of data - Code change #1 for HWK2
         self.trailing_count = []
         
-
     # Function slightly modified from polygon sample code to format the date string
     def ts_to_datetime(self, ts) -> str:
         return datetime.datetime.fromtimestamp(ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
 
-    # Function which clears the raw data tables once we have aggregated the data in a 6 minute interval
-    def reset_raw_data_tables(self, engine):
-        with engine.begin() as conn:
-            for curr in self.currency_pairs:
-                conn.execute(text("DROP TABLE " + curr[0] + curr[1] + "_raw;"))
-                conn.execute(
-                    text("CREATE TABLE " + curr[0] + curr[1] + "_raw(ticktime text, fxrate  numeric, inserttime text);"))
-
-
-    # This creates a table for storing the raw, unaggregated price data for each currency pair in the SQLite database
-    def initialize_raw_data_tables(self, engine):
-        with engine.begin() as conn:
-            for curr in self.currency_pairs:
-                conn.execute(
-                    text("CREATE TABLE " + curr[0] + curr[1] + "_raw(ticktime text, fxrate  numeric, inserttime text);"))
-
-
-    # This creates a table for storing the (6 min interval) aggregated price data for each currency pair in the SQLite database
-    def initialize_aggregated_tables(self,engine):
-        with engine.begin() as conn:
-            for curr in self.currency_pairs:
-                conn.execute(text(
-                    "CREATE TABLE " + curr[0] + curr[1] + "_agg(inserttime text, avgfxrate  numeric, stdfxrate numeric);"))
-
     # This creates a table for storing the (6 min interval) keltner data vectors
-    # Code change #2 for HWK2
+    # Code change #3 for HWK2 
     def initialize_keltner_tables(self,engine):
         with engine.begin() as conn:
             for curr in self.currency_pairs:
                 conn.execute(text(
                     "CREATE TABLE " + curr[0] + curr[1] + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time);"))
 
-
-    # This function is called every 6 minutes to aggregate the data, store it in the aggregate table,
-    # and then delete the raw data
-    def aggregate_raw_data_tables(self, engine):
+#************************ Code Change #1 for HWK5 *******************************************************
+# Creating a table for predicted return and actual return
+    def initialize_prediction_return_tables(self,engine):
         with engine.begin() as conn:
             for curr in self.currency_pairs:
-                result = conn.execute(
-                    text("SELECT AVG(fxrate) as avg_price, COUNT(fxrate) as tot_count FROM " + curr[0] + curr[1] + "_raw;"))
-                for row in result:
-                    avg_price = row.avg_price
-                    tot_count = row.tot_count
-                std_res = conn.execute(text(
-                    "SELECT SUM((fxrate - " + str(avg_price) + ")*(fxrate - " + str(avg_price) + "))/(" + str(
-                        tot_count) + "-1) as std_price FROM " + curr[0] + curr[1] + "_raw;"))
-                for row in std_res:
-                    std_price = sqrt(row.std_price)
-                date_res = conn.execute(text("SELECT MAX(ticktime) as last_date FROM " + curr[0] + curr[1] + "_raw;"))
-                for row in date_res:
-                    last_date = row.last_date
-                conn.execute(text("INSERT INTO " + curr[0] + curr[
-                    1] + "_agg (inserttime, avgfxrate, stdfxrate) VALUES (:inserttime, :avgfxrate, :stdfxrate);"),
-                             [{"inserttime": last_date, "avgfxrate": avg_price, "stdfxrate": std_price}])
+                conn.execute(text(
+                    "CREATE TABLE " + curr[0] + curr[1] + "_pred_return(predicted_return,actual_return,error,insert_time);"))
+# *******************************************************************************************************
 
-                # This calculates and stores the return values
-                exec("curr[2].append(" + curr[0] + curr[1] + "_return(last_date,avg_price))")
-                exec("print(\"The return for "+curr[0]+curr[1]+" is:"+str(curr[2][-1].hist_return)+" \")")
-
-                if len(curr[2]) > 5:
-                    try:
-                        avg_pop_value = curr[2][-6].hist_return
-                    except:
-                        avg_pop_value = 0
-                    if isnan(avg_pop_value) == True:
-                        avg_pop_value = 0
-                else:
-                    avg_pop_value = 0
-               # Calculate the average return value and print it/store it
-                curr_avg = curr[2][-1].get_avg(avg_pop_value)
-                # exec("print(\"The average return for "+curr[0]+curr[1]+" is:"+str(curr_avg)+" \")")
-
-                # Now that we have the average return, loop through the last 5 rows in the list to start compiling the
-                # data needed to calculate the standard deviation
-                for row in curr[2][-5:]:
-                    row.add_to_running_squared_sum(curr_avg)
-
-                # Calculate the standard dev using the avg
-                curr_std = curr[2][-1].get_std()
-                # exec("print(\"The standard deviation of the return for "+curr[0]+curr[1]+" is:"+str(curr_std)+" \")")
-
-                # Calculate the average standard dev
-                if len(curr[2]) > 5:
-                    try:
-                        pop_value = curr[2][-6].std_return
-                    except:
-                        pop_value = 0
-                else:
-                    pop_value = 0
-                curr_avg_std = curr[2][-1].get_avg_std(pop_value)
-                # exec("print(\"The average standard deviation of the return for "+curr[0]+curr[1]+" is:"+str(curr_avg_std)+" \")")  
-                # -------------------Investment Strategy-----------------------------------------------
-                try:
-                    return_value = curr[2][-1].hist_return
-                except:
-                    return_value = 0
-                if isnan(return_value) == True:
-                    return_value = 0
-
-                try:
-                    return_value_1 = curr[2][-2].hist_return
-                except:
-                    return_value_1 = 0
-                if isnan(return_value_1) == True:
-                    return_value_1 = 0
-
-                try:
-                    return_value_2 = curr[2][-3].hist_return
-                except:
-                    return_value_2 = 0
-                if isnan(return_value_2) == True:
-                    return_value_2 = 0
-
-                try:
-                    upp_band = curr[2][-1].avg_return + (1.5 * curr[2][-1].std_return)
-                    if return_value >= upp_band and curr[
-                        3].Prev_Action_was_Buy == True and return_value != 0:  # (return_value > 0) and (return_value_1 > 0) and
-                        curr[3].sell_curr(avg_price)
-                except:
-                    pass
-
-                try:
-                    loww_band = curr[2][-1].avg_return - (1.5 * curr[2][-1].std_return)
-                    if return_value <= loww_band and curr[
-                        3].Prev_Action_was_Buy == False and return_value != 0:  # and  (return_value < 0) and (return_value_1 < 0)
-                        curr[3].buy_curr(avg_price)
-                except:
-                    pass
-
-# Code change #3 for HWK2
+# Code change #3 for HWK2 
 # Define a function to calculate the keltner bands
     def calculate_factors(self, min_bid, max_bid,sum_bid,): 
-        volatility = (max_bid - min_bid)  # Calculate the volatility
         avg_price = sum_bid / self.aggregate_max # Calculate the average price
+        volatility = (max_bid - min_bid)/avg_price  # Calculate the volatility #5
         upper_bands = [] # Create a list to store the upper bands
         lower_bands = [] # Create a list to store the lower bands
         for i in range(1, 101):
@@ -202,10 +86,23 @@ class data_writer():
         
         return volatility, avg_price,upper_bands,lower_bands # Return the volatility, average price, upper bands and lower bands
 
-#**********************************************************************************************************************
-    # Code change #2 for HWK3
+    #************************** Code Change #2 for HWK5 ********************************************************************************************
+    # Define a function to calculate the predicted return
+    def signal_alignment_and_error(self, return_sum, predicted_sum, error_threshold):
+        # Check if both are the same sign
+        if(return_sum * predicted_sum > 0 ):
+            if(abs(return_sum - predicted_sum) < error_threshold):
+                return 1  # Return 1 to reinvest
+            else:
+                return 0  # Return 0 to do nothing
+        # Check if both are the same sign
+        else:
+            return -1  # Return -1 to close trade
+    # ***************************************************************************************************************************************************
+    
+    # Code change #2 for HWK3 
     # Define a function to define position of the stock based on the loss threshold 
-    def trailing_layer(self, portfolio, return_sum, threshold, current_value,iter):
+    def trailing_layer(self, portfolio, return_sum, threshold, current_value,iter,signal_alignment_value):
         position_for_last_frame = portfolio.position # Get the position of the stock for the last frame
         total_units_last_frame = portfolio.current_units # Get the total units of the stock for the last frame
     
@@ -224,29 +121,19 @@ class data_writer():
             
             # Calculate the profit and loss
             portfolio.pnl=selling_price - buying_price 
-            print("For the currency pair: ", portfolio.from_, portfolio.to)
-            print("Return sum:", return_sum)
 
             # Check if the return sum is less than the threshold
-            if(return_sum<-threshold):        
+            if(return_sum<-threshold or signal_alignment_value==-1):        
                 portfolio.position = 'CLOSED' # Close the position
                 portfolio.current_units = 0 # Set the current units to 0
                 portfolio.units_list = [] # Set the units list to empty
                 portfolio.price_list = []  # Set the price list to empty
-                print("Seling all units of "+portfolio.from_+portfolio.to)
-                print("Return rate is "+str(return_sum))
-                print("Selling price: "+str(selling_price))
-                print("Buying price: "+str(buying_price))
-                print("PnL: "+str(portfolio.pnl))
             
-            else:
+            elif(signal_alignment_value==1):
                 step_units = 100 # Set the step units to 100
                 portfolio.units_list.append(step_units)   # Append the step units to the units list
                 portfolio.price_list.append(current_value) # Append the current value to the price list
-                portfolio.current_units+=step_units # Increment the current units by the step units
-                print("Buying 100 more units of "+portfolio.from_+portfolio.to)  
-                print("Return rate is "+str(return_sum))
-                print("PnL: "+str(portfolio.pnl))
+                portfolio.current_units+=step_units # Increment the current units by the step units         
 
         # Calculate the total return on the currency pairs doing short trades
         elif(portfolio.position == 'SHORT'): 
@@ -259,10 +146,12 @@ class data_writer():
             # Calculate the profit/loss
             portfolio.pnl=buying_price - selling_price
 
-            if(return_sum>threshold): # Check if the return sum is greater than the threshold
+            if(return_sum>threshold or signal_alignment_value==-1): # Check if the return sum is greater than the threshold
                 portfolio.position = 'CLOSED' # Close the position
                 portfolio.current_units = 0 
-            else:
+                portfolio.units_list = [] # Set the units list to empty
+                portfolio.price_list = []  # Set the price list to empty
+            elif(signal_alignment_value==1):
                 step_units = 100
                 portfolio.units_list.append(step_units)
                 portfolio.price_list.append(current_value)
@@ -272,7 +161,6 @@ class data_writer():
         self.write_to_csv(portfolio.from_, portfolio.to, position_for_last_frame, total_units_last_frame, portfolio.pnl, return_sum,iter)
                         
     # Define a function to write the results of total units, total pnl of each currency pair to a csv file
-    
     def write_to_csv(self,from_, to, position, total_units, total_pnl,return_sum,iter):
         # Open the csv file
         with open('csv_files/trailing_layers_'+from_+to+'.csv', 'a', newline='') as file: 
@@ -309,43 +197,99 @@ class data_writer():
 
         return total_return
 
+    # ******************************** Code Change #3 for HWK5 ******************************************************************************************************************************************************************** 
+    # Define a function to calculate the total predicted return of the currency pair #5
+    def get_total_pred_return(self, engine, from_curr, to_curr, time_frame):
+        # Calculate the total sum of returns for each currency pair every hour and store it in the database
+        total_pred_return = 0
+
+        # Get the current time
+        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Calculate the current time in seconds
+        current_time_seconds = time.mktime(datetime.datetime.strptime(current_time, "%Y-%m-%d %H:%M:%S").timetuple())
+
+        # Calculate the time in seconds for one hour ago
+        one_hour_ago_seconds = current_time_seconds - time_frame
+
+        # Sum the return_prices for each currency pair for the last hour
+        with engine.begin() as conn:
+            result = conn.execute(text("SELECT SUM(predicted_return) FROM " + from_curr + to_curr + "_pred_return WHERE insert_time > :one_hour_ago_seconds;"), [{"one_hour_ago_seconds":one_hour_ago_seconds}])
+            for row in result:
+                total_pred_return = row[0]
+
+        return total_pred_return
+
      # Define a function to use the trailing steps on the currency pairs and decide when to close the position       
-    def trailing_stops(self, count, engine, from_curr, to_curr, portfolio, current_value,iter):
+    def trailing_stops(self, count, engine, from_curr, to_curr, portfolio, current_value,iter, error_threshold):
 
         # Perform trailing stops for each currency pair
         hour_in_seconds = 3600
 
         # Check if the count is 1 hour
         if(count == 1 * hour_in_seconds ): 
+            threshold = 0.0025
+
             # Get the total return for the last hour
             total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
 
+            # Get the total return for the last hour
+            total_pred_return = self.get_total_pred_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Calculate the signal alignment value
+            signal_alignment_value = self.signal_alignment_and_error(total_return,total_pred_return, error_threshold)
+
             # Perform trailing stops
-            self.trailing_layer(portfolio, total_return, 0.0025, current_value,iter)
+            self.trailing_layer(portfolio, total_return, threshold, current_value,iter,signal_alignment_value)  
 
         # Check if the count is 2 hours
         elif(count == 2 * hour_in_seconds ):
+            threshold = 0.0015
+
             # Get the total return for the last hour
             total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
 
+            # Get the total return for the last hour
+            total_pred_return = self.get_total_pred_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Calculate the signal alignment value
+            signal_alignment_value = self.signal_alignment_and_error(total_return,total_pred_return, error_threshold)
+
             # Perform trailing stops
-            self.trailing_layer(portfolio, total_return, 0.0015, current_value,iter)
+            self.trailing_layer(portfolio, total_return, threshold, current_value,iter,signal_alignment_value)
 
         # Check if the count is 3 hours
         elif(count == 3 * hour_in_seconds):
+            threshold = 0.001
+
             # Get the total return for the last hour
             total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
 
+            # Get the total return for the last hour
+            total_pred_return = self.get_total_pred_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Calculate the signal alignment value
+            signal_alignment_value = self.signal_alignment_and_error(total_return,total_pred_return, error_threshold)
+
             # Perform trailing stops
-            self.trailing_layer(portfolio, total_return, 0.001, current_value,iter)
+            self.trailing_layer(portfolio, total_return,threshold, current_value,iter,signal_alignment_value)
 
         # Check if the count is 4 hours
-        elif(count % ( hour_in_seconds) == 0 ):
+        elif(count!=0 and count % hour_in_seconds == 0 ):
+            threshold = 0.0005  
+
             # Get the total return for the last hour
             total_return = self.get_total_return(engine, from_curr, to_curr, hour_in_seconds)
 
+            # Get the total return for the last hour
+            total_pred_return = self.get_total_pred_return(engine, from_curr, to_curr, hour_in_seconds)
+
+            # Calculate the signal alignment value
+            signal_alignment_value = self.signal_alignment_and_error(total_return,total_pred_return, error_threshold)
+
             # Perform trailing stops
-            self.trailing_layer(portfolio, total_return, 0.0005, current_value,iter)        
+            self.trailing_layer(portfolio, total_return,threshold, current_value,iter,signal_alignment_value)
+   
 
     #**********************************************************************************************************************
         
@@ -373,20 +317,26 @@ class data_writer():
         engine = create_engine("sqlite+pysqlite:///{}/{}.db".format(self.db_location, self.table_name), echo=False, future=True)
 
         # Create the needed tables in the database
-        self.initialize_raw_data_tables(engine)
         self.initialize_aggregated_tables(engine)
 
         # Code change #5 for HWK2
         self.initialize_keltner_tables(engine)  # Create the keltner tables in the database
+        self.initialize_prediction_return_tables(engine) 
 
-# ************************* Code Change #1 for HWK4 ******************************************************
+#  Code Change #1 for HWK4 
         with open('volatility_thresholds.pkl', 'rb') as f:
             volatility_thresholds = pickle.load(f)
 
         prediction_models = {}
         for currency in self.currency_pairs:
             prediction_models[currency[0]+currency[1]] =  load_model('tuned_model_' + currency[0]+currency[1])
-# *******************************************************************************************************
+
+
+        # ********************************** Code change #4 for HWK5 **********************************************************************
+        # Load the error thresholds from the pickle file
+        with open('error_thresholds.pkl', 'rb') as f:
+            error_thresholds = pickle.load(f)
+        # ***********************************************************************************************
 
         # Open a RESTClient for making the api calls
         client = RESTClient(self.key)
@@ -436,11 +386,12 @@ class data_writer():
                         keltner_bands_exist_flags[iter] = False
                         predicted_return = 0
 
-                        #**********************************************************************************************************************
+                        # **********************************************************************************************************************
+                        predicted_return_sum = 0 #-  Code Change #5 for HWK5
+                        actual_return_sum = 0 #-  Code Change #5 for HWK5
+                        # **********************************************************************************************************************  
                         return_price = 0 # Defining a variable to be used -   Code Change #3 for HWK3
                         prev_avg_price = 0 # Defining a variable to be used - Code Change #3 for HWK3
-                        #**********************************************************************************************************************
-
                         continue
 
                     # Calculate fd as total crosses/volatility
@@ -466,19 +417,17 @@ class data_writer():
                     if prev_avg_price != 0:
                         return_price = (avg_price - prev_avg_price) / prev_avg_price
 
-# ********************************** Code Change #2 for HWK4 **********************************
+                    # Code Change #2 for HWK4
                     pred_df = pd.DataFrame([[min_prices[iter], max_prices[iter],pred_fd, pred_volatility, avg_price]], columns=['min_price','max_price','fd', 'volatility', 'average_price'])
                     predictions = predict_model(prediction_models[from_+to], data=pred_df)
 
 
-                    # make vector for min,max,avg,vol,fd, return
+                    # Make vector for min,max,avg,vol,fd, return
                     keltner_vector = [min_prices[iter], max_prices[iter], avg_price, volatility, fd, return_price]
                     predicted_vector = [predicted_return,return_price,abs(predicted_return-return_price)]
 
-                    #updateing predicted return for next iteration
+                    # Updating predicted return for next iteration
                     predicted_return = predictions['prediction_label'].to_numpy()[0]
-
-# **********************************************************************************************************************
 
                     # print the vector
                     print("The vector for " + currency[0] + currency[1] + " is:" + str(keltner_vector) + "\n")
@@ -489,6 +438,13 @@ class data_writer():
                             "INSERT INTO " + from_ + to + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time) VALUES (:min_price, :max_price, :average_price, :volatility, :fd, :return_price, :insert_time)"),
                                     [{"min_price": min_prices[iter], "max_price": max_prices[iter], "average_price": avg_price, "volatility": volatility, "fd": fd, "return_price": return_price, "insert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])
 
+                    # ************************* Code Change #6 for HWK5 ************************************************************************************
+                    # Insert the predicted vector into the database
+                    with engine.begin() as conn:
+                        conn.execute(text(
+                            "INSERT INTO " + from_ + to + "_pred_return(predicted_return,actual_return,error, insert_time) VALUES (:predicted_return, :actual_return, :abs_diff, :insert_time)"),
+                                    [{"predicted_return":  float(predicted_vector[0]), "actual_return": predicted_vector[1], "abs_diff": predicted_vector[2], "insert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])
+                    # ************************************************************************************************************************************
 
                     # Make a csv file for the vector and append it to the csv file
                     with open('csv_files/keltner_vector_'+from_+to+'.csv', 'a', newline='') as file:
@@ -498,14 +454,13 @@ class data_writer():
                             keltner_header_exists[iter] = True
                         writer.writerow(keltner_vector)
 
-                    # ********************************* Code Change #3 for HWK4 *********************************
+                    # Code Change #3 for HWK4 
                     with open('csv_files/pred_return_'+from_+to+'.csv', 'a', newline='') as file:
                         writer = csv.writer(file)
                         if(predicted_return_header_exists[iter] == False):
                             writer.writerow(["predicted_return","actual_return","error"])
                             predicted_return_header_exists[iter] = True
                         writer.writerow(predicted_vector)
-                    # **************************************************************************************************
 
                     # Reset the counters
                     min_prices[iter] = 999999999
@@ -554,7 +509,6 @@ class data_writer():
                 total_crosses[iter] += cross
 
                 # Code change #4 for HWK3
-                # **********************************************************************************************************************
 
                 # If the count is 1, then insert the data into the database
                 if(self.count == 1):
@@ -564,14 +518,7 @@ class data_writer():
                     currency[3].price_list.append(avg_price) # Append the price to the price list
 
                 # Call the trailing stop function
-                self.trailing_stops(self.count,engine,from_,to,currency[3],avg_price,iter)
-                # **********************************************************************************************************************
-
-                # Write the data to the SQLite database, raw data tables
-                with engine.begin() as conn:
-                    conn.execute(text(
-                        "INSERT INTO " + from_ + to + "_raw(ticktime, fxrate, inserttime) VALUES (:ticktime, :fxrate, :inserttime)"),
-                                 [{"ticktime": dt, "fxrate": avg_price, "inserttime": insert_time}])
+                self.trailing_stops(self.count,engine,from_,to,currency[3],avg_price,iter,error_thresholds[from_+to])
 
         # Code change #9 for HWK2
         # Print the table of vectors for all currency pairs
