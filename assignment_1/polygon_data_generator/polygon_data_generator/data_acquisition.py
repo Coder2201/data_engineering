@@ -4,9 +4,6 @@ import time
 from polygon import RESTClient
 from sqlalchemy import create_engine
 from sqlalchemy import text
-from math import sqrt
-from math import isnan
-from math import floor
 import pickle
 from pycaret.regression import *
 import pandas as pd
@@ -17,7 +14,7 @@ import csv
 class portfolio(object):
     def __init__(self, from_, to): 
 
-        # Define the currency pair we are trading
+        # Define the currency pair we are trading 
         self.from_ = from_ # The currency we are buying
         self.to = to # The currency we are selling
 
@@ -49,7 +46,7 @@ class data_writer():
         self.db_location = location
         # Enter name of database
         self.table_name = table_name
-        self.aggregate_max = 10 # 6 minutes worth of data - Code change #1 for HWK2
+        self.aggregate_max = 60 # 6 minutes worth of data - Code change #1 for HWK2
         self.trailing_count = []
         
     # Function slightly modified from polygon sample code to format the date string
@@ -64,14 +61,12 @@ class data_writer():
                 conn.execute(text(
                     "CREATE TABLE " + curr[0] + curr[1] + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time);"))
 
-#************************ Code Change #1 for HWK5 *******************************************************
 # Creating a table for predicted return and actual return
     def initialize_prediction_return_tables(self,engine):
         with engine.begin() as conn:
             for curr in self.currency_pairs:
                 conn.execute(text(
                     "CREATE TABLE " + curr[0] + curr[1] + "_pred_return(predicted_return,actual_return,error,insert_time);"))
-# *******************************************************************************************************
 
 # Code change #3 for HWK2 
 # Define a function to calculate the keltner bands
@@ -86,7 +81,6 @@ class data_writer():
         
         return volatility, avg_price,upper_bands,lower_bands # Return the volatility, average price, upper bands and lower bands
 
-    #************************** Code Change #2 for HWK5 ********************************************************************************************
     # Define a function to calculate the predicted return
     def signal_alignment_and_error(self, return_sum, predicted_sum, error_threshold):
         # Check if both are the same sign
@@ -98,8 +92,7 @@ class data_writer():
         # Check if both are the same sign
         else:
             return -1  # Return -1 to close trade
-    # ***************************************************************************************************************************************************
-    
+       
     # Code change #2 for HWK3 
     # Define a function to define position of the stock based on the loss threshold 
     def trailing_layer(self, portfolio, return_sum, threshold, current_value,iter,signal_alignment_value):
@@ -197,7 +190,6 @@ class data_writer():
 
         return total_return
 
-    # ******************************** Code Change #3 for HWK5 ******************************************************************************************************************************************************************** 
     # Define a function to calculate the total predicted return of the currency pair #5
     def get_total_pred_return(self, engine, from_curr, to_curr, time_frame):
         # Calculate the total sum of returns for each currency pair every hour and store it in the database
@@ -224,7 +216,7 @@ class data_writer():
     def trailing_stops(self, count, engine, from_curr, to_curr, portfolio, current_value,iter, error_threshold):
 
         # Perform trailing stops for each currency pair
-        hour_in_seconds = 3600
+        hour_in_seconds = 600 # Changed hour to 10 minutes
 
         # Check if the count is 1 hour
         if(count == 1 * hour_in_seconds ): 
@@ -289,9 +281,6 @@ class data_writer():
 
             # Perform trailing stops
             self.trailing_layer(portfolio, total_return,threshold, current_value,iter,signal_alignment_value)
-   
-
-    #**********************************************************************************************************************
         
     def acquire_data_and_write(self):
 
@@ -317,26 +306,23 @@ class data_writer():
         engine = create_engine("sqlite+pysqlite:///{}/{}.db".format(self.db_location, self.table_name), echo=False, future=True)
 
         # Create the needed tables in the database
-        self.initialize_aggregated_tables(engine)
+        # self.initialize_aggregated_tables(engine)
 
         # Code change #5 for HWK2
         self.initialize_keltner_tables(engine)  # Create the keltner tables in the database
         self.initialize_prediction_return_tables(engine) 
 
 #  Code Change #1 for HWK4 
-        with open('volatility_thresholds.pkl', 'rb') as f:
+        with open('models/volatility/volatility_thresholds.pkl', 'rb') as f:
             volatility_thresholds = pickle.load(f)
 
         prediction_models = {}
         for currency in self.currency_pairs:
-            prediction_models[currency[0]+currency[1]] =  load_model('tuned_model_' + currency[0]+currency[1])
-
-
-        # ********************************** Code change #4 for HWK5 **********************************************************************
+            prediction_models[currency[0]+currency[1]] =  load_model('models/models/tuned_model_' + currency[0]+currency[1])
+      
         # Load the error thresholds from the pickle file
-        with open('error_thresholds.pkl', 'rb') as f:
+        with open('models/error/error_thresholds.pkl', 'rb') as f:
             error_thresholds = pickle.load(f)
-        # ***********************************************************************************************
 
         # Open a RESTClient for making the api calls
         client = RESTClient(self.key)
@@ -386,10 +372,10 @@ class data_writer():
                         keltner_bands_exist_flags[iter] = False
                         predicted_return = 0
 
-                        # **********************************************************************************************************************
+                        
                         predicted_return_sum = 0 #-  Code Change #5 for HWK5
                         actual_return_sum = 0 #-  Code Change #5 for HWK5
-                        # **********************************************************************************************************************  
+                        
                         return_price = 0 # Defining a variable to be used -   Code Change #3 for HWK3
                         prev_avg_price = 0 # Defining a variable to be used - Code Change #3 for HWK3
                         continue
@@ -438,13 +424,13 @@ class data_writer():
                             "INSERT INTO " + from_ + to + "_keltner(min_price, max_price, average_price, volatility,fd, return_price,insert_time) VALUES (:min_price, :max_price, :average_price, :volatility, :fd, :return_price, :insert_time)"),
                                     [{"min_price": min_prices[iter], "max_price": max_prices[iter], "average_price": avg_price, "volatility": volatility, "fd": fd, "return_price": return_price, "insert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])
 
-                    # ************************* Code Change #6 for HWK5 ************************************************************************************
+                    
                     # Insert the predicted vector into the database
                     with engine.begin() as conn:
                         conn.execute(text(
                             "INSERT INTO " + from_ + to + "_pred_return(predicted_return,actual_return,error, insert_time) VALUES (:predicted_return, :actual_return, :abs_diff, :insert_time)"),
                                     [{"predicted_return":  float(predicted_vector[0]), "actual_return": predicted_vector[1], "abs_diff": predicted_vector[2], "insert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])
-                    # ************************************************************************************************************************************
+                    
 
                     # Make a csv file for the vector and append it to the csv file
                     with open('csv_files/keltner_vector_'+from_+to+'.csv', 'a', newline='') as file:
@@ -509,7 +495,6 @@ class data_writer():
                 total_crosses[iter] += cross
 
                 # Code change #4 for HWK3
-
                 # If the count is 1, then insert the data into the database
                 if(self.count == 1):
                     print("---------------Initialize trade with 100 units for "+from_+to+"-----------------")

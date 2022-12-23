@@ -1,0 +1,163 @@
+from sqlalchemy import text
+import pickle
+import pandas as pd
+import numpy as np
+from polygon_data_generator import portfolio
+from polygon_data_generator import currency_volatility_thresholds
+from pycaret.regression import *
+from matplotlib import pyplot as plt
+
+
+# Code Change for HWK4 
+# Targeting the currency pairs for which we need to train data
+train_currency_pairs = [
+    ["USD","CAD",[],portfolio("USD","CAD")],
+                  ["USD","JPY",[],portfolio("USD","JPY")],
+                  ["USD","MXN",[],portfolio("USD","MXN")],
+                  ["EUR","USD",[],portfolio("EUR","USD")],
+                  ["AUD","USD",[],portfolio("AUD","USD")],
+                  ["USD","CZK",[],portfolio("USD","CZK")],
+                  ["USD","PLN",[],portfolio("USD","PLN")],
+                  ["USD","INR",[],portfolio("USD","INR")]]
+
+# Making a class for storing the volatility thresholds for each currency pair
+class currency_volatility_thresholds(object):
+    def __init__(self, class_1_lower, class_1_higher, class_2_lower, class_2_higher, class_3_lower, class_3_higher):
+        self.class_1_lower = class_1_lower
+        self.class_1_higher = class_1_higher
+        self.class_2_lower = class_2_lower
+        self.class_2_higher = class_2_higher
+        self.class_3_lower = class_3_lower
+        self.class_3_higher = class_3_higher
+   
+# Statistically classify the VOL and the FD into 3 different classes for each currency pair:
+# 1. High VOL and high FD (top 33 data points);
+# 2. Medium VOL and high FD (following 34 data points); and
+# 3. Low VOL and high FD (lower 33 data points).
+
+# Sorting the data points by VOL in each training set for each currency pair
+train_set = {}
+volatility_thresholds = {}
+for pair in train_currency_pairs:
+    print("The training set for ",pair[0],pair[1]," is being sorted by VOL.")
+    df = pd.read_csv("models/training_data/keltner_vector_"+pair[0]+pair[1]+".csv")
+    df = df.sort_values(by=['volatility'],ascending=False)
+    print("The test set shape is ",df.shape[0])
+ 
+    size_split_1 = int(df.shape[0]/3)
+    size_split_2 = 2 * size_split_1
+
+    # Storing the sorted data in a dictionary
+    vol_values_1 = df.iloc[0:size_split_1]['volatility'].to_numpy()
+    vol_values_2 = df.iloc[size_split_1:size_split_2]['volatility'].to_numpy()
+    vol_values_3 = df.iloc[size_split_2:df.shape[0]]['volatility'].to_numpy()
+
+    # Assigning the class labels to the volatility values and fd values based on the ranking. 
+    # # First 33 as class 1. 
+    df.iloc[0:size_split_1, df.columns.get_loc('volatility')] = 1
+    # The next 34 data points are classified as medium VOL and high FD
+    df.iloc[size_split_1:size_split_2, df.columns.get_loc('volatility')] = 2
+    # The last 33 data points are classified as low VOL and high FD
+    df.iloc[size_split_2:df.shape[0], df.columns.get_loc('volatility')] = 3
+    
+    # df = df.sort_values(by=['fd'],ascending=False)
+    # df.iloc[0:size_split_1, df.columns.get_loc('fd')] = "1"
+    # df.iloc[size_split_1:size_split_2, df.columns.get_loc('fd')] = "2"
+    # df.iloc[size_split_2:df.shape[0], df.columns.get_loc('fd')] = "3"
+    
+    # Save the data frame as a csv file
+    df.to_csv("models/training_data/Train_set_"+pair[0]+pair[1]+".csv",index=False)
+    volatility_thresholds[pair[0] + pair[1]] = currency_volatility_thresholds(vol_values_1.min(),vol_values_1.max(),
+                                                                              vol_values_2.min(),vol_values_2.max(),
+                                                                              vol_values_3.min(),vol_values_3.max())
+   
+    # df['volatility'] = df['volatility'].apply(str)
+    # df['fd'] = df['fd'].apply(str)
+
+    # print("The data is: ",df['fd'].dtypes)
+
+    train_set[pair[0] + pair[1]] = pd.read_csv("models/training_data/Train_set_" + pair[0] + pair[1] + ".csv")
+
+# Save the volatility thresholds in a pickle file
+with open('models/volatility/volatility_thresholds.pkl', 'wb') as f:
+    pickle.dump(volatility_thresholds, f)
+
+# Initialize the dictionary to store the scores for each currency pair
+scores = {}
+
+# The regression model is the Linear Regression model.
+for pair in train_currency_pairs:
+    # Create a new regression model for each currency pair
+    print("The currency pair is: ",pair[0]+pair[1])
+
+    test_set = pd.read_csv("models/test_files/test_set_"+pair[0]+pair[1]+".csv")
+
+        # The test set is prepared in the same way as the training set
+    test_set.loc[test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_1_lower, 'volatility'] = 1
+    test_set.loc[(test_set['volatility'] < volatility_thresholds[pair[0] + pair[1]].class_1_lower)
+                  & (test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_3_higher), 'volatility'] = 2
+    test_set.loc[test_set['volatility'] < volatility_thresholds[pair[0] + pair[1]].class_3_higher, 'volatility'] = 3
+
+    # Initialize setup
+    my_setup = setup( train_set[pair[0]+pair[1]], target = 'return_price', numeric_features = [ 'average_price', 'volatility'],html = False, ignore_features= 'fd', test_data=test_set)
+
+    # Compare models
+    best = compare_models(sort = 'R2')
+
+    # Print the best model
+    print("The best is : ", best.get_params())
+
+    # Create a model
+    model = create_model(best)
+
+    # Tuning model hyperparameters
+    tuned_model = tune_model(model)
+    tuned_result = predict_model(tuned_model)
+
+    # Obtain the scores for the tuned model
+    score = pull()
+
+    # Save the scores in a dictionary
+    scores[pair[0]+pair[1]] = score
+
+    # Save the tuned model as the best regression model
+    best_tuned = save_model(tuned_model, 'models/models/tuned_model_'+pair[0]+pair[1])
+
+# Print the scores for each currency pair
+for pair in train_currency_pairs:
+    print("The scores for ", pair[0]+pair[1], " are: \n", scores[pair[0]+pair[1]])
+
+# Plot the actual values and predicted values as line plots on the same graph
+for pair in train_currency_pairs:
+    # load the model
+    model = load_model('models/models/tuned_model_'+pair[0]+pair[1])
+    # load the test set
+    test_set = pd.read_csv("models/test_files/test_set_"+pair[0]+pair[1]+".csv")
+
+    # The test set is prepared in the same way as the training set
+    test_set.loc[test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_1_lower, 'volatility'] = 1
+    test_set.loc[(test_set['volatility'] < volatility_thresholds[pair[0] + pair[1]].class_1_lower)
+                  & (test_set['volatility'] > volatility_thresholds[pair[0] + pair[1]].class_3_higher), 'volatility'] = 2
+    test_set.loc[test_set['volatility'] < volatility_thresholds[pair[0] + pair[1]].class_3_higher, 'volatility'] = 3
+
+    # Predict the values for the test set
+    predictions = predict_model(model, data=test_set)
+
+    # Plot the actual values and predicted values as line plots on the same graph
+    print("The shape is ",predictions.shape[0])
+    plt.plot(predictions['return_price'], label='Actual')
+    plt.plot(predictions['prediction_label'], label='Predicted')
+    plt.legend()
+    plt.title("Actual and Predicted values for "+pair[0]+pair[1])
+    plt.xlabel("Time")
+    plt.ylabel("Return")
+    # plt.show()
+    plt.savefig("models/graphs/Actual_Predicted_"+pair[0]+pair[1]+".png")
+    plt.clf()
+    
+
+
+
+
+
+ 
